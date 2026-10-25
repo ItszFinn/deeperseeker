@@ -38,6 +38,7 @@ security = HTTPBasic()
 from functions import (
     effort_level,
     reply_id,
+    request_directive,
     request_effort,
     request_tools,
     token_busy,
@@ -132,6 +133,7 @@ from plugin_helper import (
     max_output_tokens,
     needs_rollover,
     strip_summary_tags,
+    turn_directive,
 )
 
 logger = logging.getLogger("uvicorn.error")
@@ -3114,6 +3116,9 @@ async def chat_completions(request: Request):
     thinking = is_thinking_enabled(body, request)
     request_effort.set(effort_level(body) if thinking else None)
     search = body.get("search", False)
+    request_directive.set(
+        turn_directive(body.get("tool_choice"), body.get("response_format"))
+    )
     stream = body.get("stream", False)
     tools = body.get("tools", None)
     # P0-7: official passthrough — same handler, different upstream. The
@@ -3379,6 +3384,7 @@ async def openai_responses(request: Request):
 
     thinking = is_thinking_enabled(body, request)
     request_effort.set(effort_level(body) if thinking else None)
+    request_directive.set(turn_directive(body.get("tool_choice")))
     search = bool(body.get("search", False))
     stream = bool(body.get("stream", False))
     raw_tools = body.get("tools", None)
@@ -3528,6 +3534,7 @@ async def anthropic_messages(request: Request):
     thinking = is_thinking_enabled(body, request)
     stream = body.get("stream", False)
     tools = body.get("tools", [])
+    request_directive.set(turn_directive(body.get("tool_choice")))
 
     openai_msgs = []
     if system:

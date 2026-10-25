@@ -1291,6 +1291,10 @@ def _repair_tool_names(tools):
 # the chat endpoints; build_prompt turns it into a think-harder instruction.
 request_effort = contextvars.ContextVar("request_effort", default=None)
 
+# This turn's tool_choice / response_format as prompt text (turn_directive),
+# set by the chat endpoints; build_prompt appends it.
+request_directive = contextvars.ContextVar("request_directive", default=None)
+
 
 def effort_level(body):
     """The client's effort string, wherever the dialect puts it."""

@@ -11,7 +11,13 @@ import uuid
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from functions import count_tokens, get_session, request_effort, upload_file
+from functions import (
+    count_tokens,
+    get_session,
+    request_directive,
+    request_effort,
+    upload_file,
+)
 
 # Token budgets for injected history when (re)building a session prompt.
 MAX_HISTORY_TOKENS = int(os.getenv("DEEPSEEKER_MAX_HISTORY_TOKENS", "24000"))
@@ -628,7 +634,38 @@ for _alias in ("xhigh", "ultra", "extreme"):
 
 def _with_effort(prompt):
     instruction = EFFORT_INSTRUCTIONS.get(request_effort.get() or "")
-    return prompt + instruction + "\n" if instruction else prompt
+    if instruction:
+        prompt += instruction + "\n"
+    directive = request_directive.get()
+    return prompt + directive + "\n" if directive else prompt
+
+
+def turn_directive(tool_choice=None, response_format=None):
+    """tool_choice (OpenAI chat, Responses or Anthropic shape) and response_format
+    as an instruction for this turn, or None."""
+    parts = []
+    name = None
+    if isinstance(tool_choice, dict):
+        name = tool_choice.get("name") or (tool_choice.get("function") or {}).get("name")
+        tool_choice = tool_choice.get("type")
+    if name:
+        parts.append(f"In this reply you MUST call the tool {name} and no other tool.")
+    elif tool_choice in ("required", "any"):
+        parts.append("In this reply you MUST call at least one tool; do not reply with text only.")
+    elif tool_choice == "none":
+        parts.append("In this reply do NOT call any tool; reply with text only.")
+    fmt = response_format if isinstance(response_format, dict) else {}
+    if fmt.get("type") == "json_object":
+        parts.append("Reply with one valid JSON object only: no other text, no code fences.")
+    elif fmt.get("type") == "json_schema":
+        schema = (fmt.get("json_schema") or {}).get("schema") or fmt.get("schema") or {}
+        parts.append(
+            "Reply with one valid JSON value only (no other text, no code fences) "
+            f"matching this JSON Schema:\n{json.dumps(schema)}"
+        )
+    if not parts:
+        return None
+    return "TURN INSTRUCTION (from the API harness): " + " ".join(parts)
 
 
 def _content_text(content):
