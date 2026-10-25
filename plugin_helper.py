@@ -24,7 +24,7 @@ MAX_HISTORY_TOKENS = int(os.getenv("DEEPSEEKER_MAX_HISTORY_TOKENS", "24000"))
 MAX_TOOL_RESULTS_TOKENS = int(os.getenv("DEEPSEEKER_MAX_TOOL_RESULT_TOKENS", "12000"))
 # Per-result content cap so one giant tool output cannot eat the whole budget
 # (and so the result header survives tail-trimming).
-PER_TOOL_RESULT_TOKENS = int(os.getenv("DEEPSEEKER_PER_TOOL_RESULT_TOKENS", "2000"))
+PER_TOOL_RESULT_TOKENS = int(os.getenv("DEEPSEEKER_PER_TOOL_RESULT_TOKENS", "6000"))
 
 # Observed v4.1flash limits (measured per issue #22, not upstream guarantees):
 #   - a single first message of ~1M tokens goes through (~974,848 observed)
@@ -319,7 +319,7 @@ async def extract_tool_results(messages, latest_only=False):
                     for c in content
                     if isinstance(c, dict) and c.get("type") == "text"
                 )
-            content = _trim_to_budget(str(content), PER_TOOL_RESULT_TOKENS)
+            content = _trim_tool_result(str(content))
             args = call_args.get(call_id, (None, ""))[1]
             header = f"Tool: {name} (Call ID: {call_id})"
             if args:
@@ -495,6 +495,22 @@ def _trim_to_budget(text, max_tokens):
     # Only reachable for pathological inputs (a single token longer than the
     # budget); degrade to empty rather than return an over-budget string.
     return candidate
+
+
+def _trim_tool_result(text, max_tokens=None):
+    """Fit one tool result into its budget, cutting the middle: a search lists
+    its best hit first, a command prints its error last."""
+    max_tokens = PER_TOOL_RESULT_TOKENS if max_tokens is None else max_tokens
+    if count_tokens(text) <= max_tokens:
+        return text
+    marker = "\n[... middle of the tool result truncated ...]\n"
+    half = max(max_tokens, 1) * 2  # ~4 chars/token, half each side
+    while half > 0:
+        candidate = text[:half] + marker + text[-half:]
+        if count_tokens(candidate) <= max_tokens:
+            return candidate
+        half = half * 4 // 5
+    return ""
 
 
 def _cap_parts(parts, max_tokens):
@@ -739,7 +755,7 @@ async def build_prompt(
                 continue
             content = _content_text(msg.get("content", ""))
             if role == "tool":
-                content = _trim_to_budget(content, PER_TOOL_RESULT_TOKENS)
+                content = _trim_tool_result(content)
             for tc in msg.get("tool_calls") or []:
                 fn = tc.get("function") if isinstance(tc, dict) else None
                 if isinstance(fn, dict):
