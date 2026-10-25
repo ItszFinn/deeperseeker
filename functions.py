@@ -1720,6 +1720,13 @@ _WRAPPER_TAG_RE = re.compile(
 )
 
 
+# Catch-all for corrupted/degenerate DSML markers that the structured
+# regexes miss (e.g. a stray char between the bars: "<\uff5c\u89e6\uff5cDSML\uff5c\uff5c calls>"):
+# any <...> token containing a fullwidth pipe U+FF5C, which never appears in
+# legitimate prose. ASCII '|' is deliberately NOT matched (tables, code).
+_FULLWIDTH_PIPE_TAG_RE = re.compile(r"<[^<>]*\uff5c[^<>]*>")
+
+
 def _strip_stray_markers(text: str) -> str:
     """Prose path: drop bare DSML markers + orphan closers only.
 
@@ -1728,6 +1735,7 @@ def _strip_stray_markers(text: str) -> str:
     """
     if not text:
         return text
+    text = _FULLWIDTH_PIPE_TAG_RE.sub("", text)
     text = _BARE_DSML_MARKER_RE.sub("", text)
     return _ORPHAN_CLOSER_RE.sub("", text)
 
@@ -1736,6 +1744,7 @@ def _strip_wrapper_tags(text: str) -> str:
     """Wrapper path: drop the whole tag family (open or close) + bare markers."""
     if not text:
         return text
+    text = _FULLWIDTH_PIPE_TAG_RE.sub("", text)
     text = _BARE_DSML_MARKER_RE.sub("", text)
     return _WRAPPER_TAG_RE.sub("", text)
 
@@ -1877,6 +1886,7 @@ class StreamToolParser:
                 hold = ">" not in tail and (
                     _is_plausible_stream_entry_prefix(tail)
                     or _is_plausible_stream_closer_prefix(tail)
+                    or "\uff5c" in tail
                 )
                 if last_lt != -1 and hold:
                     if last_lt > 0:
