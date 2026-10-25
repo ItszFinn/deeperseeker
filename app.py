@@ -3102,6 +3102,14 @@ async def _json_body(request: Request):
     return body
 
 
+@app.exception_handler(UpstreamError)
+async def _upstream_error_handler(request: Request, e):
+    """An upstream failure outside the send's retry path (chat creation, PoW
+    challenge) is an API error with its status, not a bare 500."""
+    is_anthropic = request.url.path.rstrip("/").endswith("/messages")
+    return _api_error_response(e, is_anthropic)
+
+
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
     # NOTE (Stage 1 minor list): `stop` and `max_tokens` are accepted but

@@ -2025,7 +2025,7 @@ async def create_challange_pow(target_path, auth_token):
         timeout=aiohttp.ClientTimeout(total=20),
     )
     async with response:
-        data = await response.json()
+        data = await _upstream_json(response)
     return data["data"]["biz_data"]["challenge"]
 
 
@@ -2058,19 +2058,38 @@ async def solve_create_pow(target_path, auth_token):
     return base64.b64encode(json.dumps(json_data).encode()).decode()
 
 
+async def _upstream_json(response):
+    """JSON body of an upstream answer. DeepSeek answers bursts with a challenge
+    page instead (seen: HTTP 202 text/html on chat_session/create): that is a
+    rate limit (429), not a crash."""
+    try:
+        return await response.json()
+    except aiohttp.ContentTypeError:
+        body = await response.text()
+    status = response.status if response.status >= 400 else 429
+    raise UpstreamError(status, f"non-JSON answer (HTTP {response.status}): {body[:200]}")
+
+
 async def create_new_chat(auth_token):
     headers = get_headers(auth_token)
     # Backup: WAF cookies not required with Android headers. Kept as fallback:
     # cookie = await get_cookies()
-    response = await post_with_failover(
-        "/api/v0/chat_session/create",
-        headers=headers,
-        # cookies=cookie,  # Backup WAF fallback
-        timeout=aiohttp.ClientTimeout(total=20),
-    )
-    async with response:
-        data = await response.json()
-    return data["data"]["biz_data"]["chat_session"]["id"]
+    for attempt in range(3):
+        response = await post_with_failover(
+            "/api/v0/chat_session/create",
+            headers=headers,
+            # cookies=cookie,  # Backup WAF fallback
+            timeout=aiohttp.ClientTimeout(total=20),
+        )
+        try:
+            async with response:
+                data = await _upstream_json(response)
+            return data["data"]["biz_data"]["chat_session"]["id"]
+        except UpstreamError as e:
+            if e.status != 429 or attempt == 2:
+                raise
+            logger.warning("chat_session/create rate limited; retrying: %s", e)
+            await asyncio.sleep(1.5 * 2**attempt)
 
 
 _EMPTY_SSE_DEFAULT = (
