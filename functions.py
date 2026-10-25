@@ -1323,6 +1323,31 @@ def _is_wrapper_name(name, args):
     return not args and name.lower() in _DSML_WRAPPER_NAMES and name not in _tool_schemas()
 
 
+_INVOKE_CLOSE_RE = re.compile(
+    r"</[｜\|]{0,2}(?:DSML[｜\|]{0,2})?\s*invoke\s*>", re.IGNORECASE
+)
+
+
+def _orphan_call(orphans, prev_name, prev_args, schemas):
+    """What orphan parameters after a closed invoke were meant for: a call to the
+    one tool they fully satisfy, "merge" when they are missing arguments of the
+    call just closed, else None (dropped, e.g. a habitual timeout on a tool
+    that has none)."""
+    keys = set(orphans)
+    fits = [
+        name
+        for name, params in schemas.items()
+        if keys <= set(params.get("properties") or {})
+        and set(params.get("required") or []) <= keys
+    ]
+    if len(fits) == 1 and fits[0] != prev_name:
+        return normalize_tool_call(fits[0], orphans)
+    prev = schemas.get(prev_name) if prev_name else None
+    if not schemas or (prev and keys <= set(prev.get("properties") or {}) and not keys & set(prev_args)):
+        return "merge"
+    return None
+
+
 def parse_tools(text):
     tools = []
     clean_text = text
@@ -1388,7 +1413,14 @@ def parse_tools(text):
                 else len(text)
             )
             body = text[start_idx:end_idx]
-            args = {}
+            # Parameters after this invoke's own closer are orphans: the model
+            # forgot the opener of its next invoke (seen live: a "code"
+            # parameter for execute_code right after a closed terminal call).
+            orphans = {}
+            close = _INVOKE_CLOSE_RE.search(body)
+            if close:
+                orphans = _dsml_params(body[close.end() :])
+                body = body[: close.start()]
             args = _dsml_params(body)
             tag_param_matches = re.finditer(
                 r"<([A-Za-z0-9_\-]+)>(.*?)(?:</\1>|$)",
@@ -1414,6 +1446,12 @@ def parse_tools(text):
                 norm = normalize_tool_call(candidate_name or "function_calls", args)
                 if norm:
                     tools.append(norm)
+            if orphans:
+                orphan_call = _orphan_call(orphans, candidate_name, args, schemas)
+                if orphan_call == "merge" and tools:
+                    tools[-1] = normalize_tool_call(tools[-1]["function"]["name"], {**args, **orphans})
+                elif orphan_call:
+                    tools.append(orphan_call)
 
     if tools:
         clean_text = re.sub(
@@ -1430,6 +1468,8 @@ def parse_tools(text):
             clean_text,
             flags=re.DOTALL | re.IGNORECASE,
         ).strip()
+        # Orphan parameters and leftover wrapper tags are call markup, not text.
+        clean_text = _strip_wrapper_tags(_DSML_PARAM_RE.sub("", clean_text)).strip()
 
     if not tools and "DSML" in text:
         dsml_block_pattern = re.compile(
@@ -1685,6 +1725,12 @@ _TOOL_END_TAG_RE = re.compile(
     r"</[｜\|]{0,2}(?:DSML[｜\|]{0,2})?\s*(?:tool_calls?|calls|invoke|function_calls?)\s*>",
     re.IGNORECASE,
 )
+# A block opened by a wrapper (function_calls ...) holds invokes: its inner
+# </invoke> must not end it, or anything after it streams out as text.
+_WRAPPER_END_TAG_RE = re.compile(
+    r"</[｜\|]{0,2}(?:DSML[｜\|]{0,2})?\s*(?:tool_calls?|calls|function_calls?)\s*>",
+    re.IGNORECASE,
+)
 
 # [FIX 4] Spaced-DSML dialect: deepseek-harness emits decorated tags with a
 # space between the ｜｜DSML｜｜ marker and the tag name, e.g.
@@ -1843,6 +1889,7 @@ class StreamToolParser:
         self.has_tool = False
         self.json_done = False
         self._end_re = None
+        self._fallback_end_re = _TOOL_END_TAG_RE
 
     def feed(self, chunk):
         self.buffer += chunk
@@ -1859,7 +1906,7 @@ class StreamToolParser:
                 # mismatched or decorated closers [FIX 3].
                 end_match = self._end_re.search(self.buffer) if self._end_re else None
                 if end_match is None:
-                    end_match = _TOOL_END_TAG_RE.search(self.buffer)
+                    end_match = self._fallback_end_re.search(self.buffer)
                 if end_match:
                     if not self.json_done:
                         tool_xml = self.buffer[: end_match.end()]
@@ -1895,6 +1942,9 @@ class StreamToolParser:
                         _append_clean_text(results, self.buffer[:start])
                     self.buffer = self.buffer[start:]
                     tag_name = m.group(1).lower()
+                    self._fallback_end_re = (
+                        _TOOL_END_TAG_RE if tag_name == "invoke" else _WRAPPER_END_TAG_RE
+                    )
                     self._end_re = re.compile(
                         r"</[｜\|]{0,2}(?:DSML[｜\|]{0,2})?\s*"
                         + re.escape(tag_name)
