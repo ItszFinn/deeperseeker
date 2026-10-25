@@ -631,6 +631,15 @@ def _with_effort(prompt):
     return prompt + instruction + "\n" if instruction else prompt
 
 
+def _content_text(content):
+    """Text of an OpenAI message content (string or list of parts)."""
+    if isinstance(content, list):
+        return " ".join(
+            c.get("text", "") for c in content if isinstance(c, dict) and c.get("type") == "text"
+        )
+    return str(content or "")
+
+
 async def build_prompt(
     messages, tools, model, is_first_message=False, rollover_summary=None
 ):
@@ -676,30 +685,42 @@ async def build_prompt(
             final_prompt, messages, tools_extract
         )
 
-        if len(messages) > 1:
-            history_parts = []
-            for msg in messages[:-1]:
-                role = msg.get("role", "unknown")
-                if role in ("system", "tool"):
-                    continue
-                content = msg.get("content", "")
-                if isinstance(content, list):
-                    content = " ".join(
-                        c.get("text", "") for c in content if c.get("type") == "text"
-                    )
-                if content:
-                    history_parts.append(f"{role.upper()}: {content}")
-            if history_parts:
-                history_parts, truncated = _cap_parts(history_parts, MAX_HISTORY_TOKENS)
-                marker = (
-                    "[... earlier conversation history truncated ...]\n"
-                    if truncated
-                    else ""
-                )
-                history_text = marker + "\n".join(history_parts)
-                final_prompt += f"[PREVIOUS CONVERSATION HISTORY]\n{history_text}\n\n"
+        # A rebuilt chat (session miss: client compressed its context, proxy
+        # restart, token rotation) replays the history in order. The turn is
+        # what came after the last assistant message: new user text and/or the
+        # results of its tool calls. An older user message must not be re-sent
+        # as the current one, or the model redoes finished work.
+        last_ast_idx = max(
+            (i for i, m in enumerate(messages) if m.get("role") == "assistant"),
+            default=-1,
+        )
+        trailing = messages[last_ast_idx + 1 :]
+        history_parts = []
+        for msg in messages[: last_ast_idx + 1]:
+            role = msg.get("role", "unknown")
+            if role == "system":
+                continue
+            content = _content_text(msg.get("content", ""))
+            if role == "tool":
+                content = _trim_to_budget(content, PER_TOOL_RESULT_TOKENS)
+            for tc in msg.get("tool_calls") or []:
+                fn = tc.get("function") if isinstance(tc, dict) else None
+                if isinstance(fn, dict):
+                    args = str(fn.get("arguments") or "")[:300]
+                    content += f"\n[called tool {fn.get('name')} with {args}]"
+            if content.strip():
+                history_parts.append(f"{role.upper()}: {content.strip()}")
+        if history_parts:
+            history_parts, truncated = _cap_parts(history_parts, MAX_HISTORY_TOKENS)
+            marker = (
+                "[... earlier conversation history truncated ...]\n"
+                if truncated
+                else ""
+            )
+            history_text = marker + "\n".join(history_parts)
+            final_prompt += f"[PREVIOUS CONVERSATION HISTORY]\n{history_text}\n\n"
 
-        tools_result_extract = await extract_tool_results(messages, latest_only=False)
+        tools_result_extract = await extract_tool_results(messages, latest_only=True)
         if tools_result_extract:
             tools_result_extract = _capped_text(
                 tools_result_extract,
@@ -708,7 +729,11 @@ async def build_prompt(
             )
             final_prompt += f"[TOOL RESULTS]\n{tools_result_extract}\n\n"
 
-        user_msg = await extract_user_msg(messages)
+        user_msg = "\n".join(
+            t
+            for t in (_content_text(m.get("content")) for m in trailing if m.get("role") == "user")
+            if t
+        )
         if user_msg:
             # DSH fix: a first message over the observed ~975K acceptance
             # ceiling fails upstream with a hard rejection, and the retry used
