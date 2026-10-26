@@ -651,7 +651,8 @@ async def generate_signature(messages, model, scope=""):
 # (median 452 -> 7401 chars) and long reasoning hit DeepSeek's cut-off (INCOMPLETE).
 # DeepSeek web has one model and one switch (thinking on/off), so the levels
 # above "low" differ only by this instruction. Measured 2026-10-26 (8 counting
-# tasks x2, median reasoning chars): medium 635, high 1311, max 1784; without
+# tasks x2, median reasoning chars): medium ~520-635, high ~1300-1540, max ~2650
+# (the older, softer max wording gave 1110-1784, sometimes below high); without
 # the high line, high was identical to medium.
 EFFORT_INSTRUCTIONS = {
     "high": (
@@ -660,9 +661,10 @@ EFFORT_INSTRUCTIONS = {
         "sanity check."
     ),
     "max": (
-        "[REASONING EFFORT: max] Before answering, reason exhaustively in your thinking: try at least two "
-        "different approaches, check edge cases, verify every step and re-check the final answer "
-        "independently. Take as long as needed."
+        "[REASONING EFFORT: max] Reason at full length in your thinking: solve the problem with at "
+        "least two fully independent methods, write out every intermediate step, re-check every "
+        "calculation a second time, list and check the edge cases, and only stop thinking when both "
+        "methods agree. Take as long as needed."
     ),
 }
 for _alias in ("xhigh", "ultra", "extreme"):
