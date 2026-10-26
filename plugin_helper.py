@@ -199,6 +199,18 @@ TOOL_USE_INSTRUCTIONS = (
 )
 
 
+# A rebuilt history is a transcript in this proxy's own notation ("ROLE: text",
+# "[called tool ...]" lines). Seen live after a token rotation: a history of
+# tool-call-only turns, and the model went on writing its notes as bracket lines
+# ("[O] GitHub TLS 10-14 ms.") in the visible reply for a dozen turns.
+REBUILT_HISTORY_NOTE = (
+    "[NOTE]\nThe history above is a transcript for context, written in the API harness's own "
+    "notation. Do not imitate its format: write your reply as normal prose (no role labels, "
+    "no bracketed note lines like [called tool ...]) and make tool calls only with the "
+    "tool-call format from the instructions.\n\n"
+)
+
+
 async def append_fresh_session_runtime(prompt, messages, tools_extract):
     """Inject the runtime contract for a new upstream chat: tool schemas and system instructions.
 
@@ -771,7 +783,10 @@ async def build_prompt(
                 else ""
             )
             history_text = marker + "\n".join(history_parts)
-            final_prompt += f"[PREVIOUS CONVERSATION HISTORY]\n{history_text}\n\n"
+            final_prompt += (
+                f"[PREVIOUS CONVERSATION HISTORY]\n{history_text}\n\n"
+                + REBUILT_HISTORY_NOTE
+            )
 
         tools_result_extract = await extract_tool_results(messages, latest_only=True)
         if tools_result_extract:

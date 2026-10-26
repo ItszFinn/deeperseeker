@@ -31,6 +31,17 @@ def test_tool_result_turn_does_not_resend_old_question():
     assert '"temp_c": 31' in p.split("[TOOL RESULTS]", 1)[1]
 
 
+def test_history_notation_is_marked_as_not_to_imitate():
+    # Seen live: after a token rotation the model copied the "[called tool ...]"
+    # lines of a tool-call-only history into its replies as "[O] ..." notes.
+    p = prompt(U, CALL, RESULT)
+    note = p.split("[PREVIOUS CONVERSATION HISTORY]\n", 1)[1].split("[TOOL RESULTS]", 1)[0]
+    assert "[called tool get_weather" in note
+    assert note.index("[called tool") < note.index("Do not imitate its format")
+    # no history, no note
+    assert "Do not imitate" not in prompt({"role": "user", "content": "hi"})
+
+
 def test_only_new_user_text_is_the_turn():
     answer = {"role": "assistant", "content": "31 degrees."}
     p = prompt(U, CALL, RESULT, answer, {"role": "user", "content": "And tomorrow?"})
