@@ -1198,7 +1198,7 @@ def _code_fence_spans(text):
 # "<"-less "｜｜DSML｜｜parameter>"): markers never belong in a value.
 _DSML_PARAM_RE = re.compile(
     r"(?:</?[｜\|]{0,2}(?:DSML[｜\|]{0,2})?\s*(?:parameter|tool_call|param|invoke)(?:\s+name\s*=|\s*=)\s*[\x27\x22]([^\x27\x22]+)[\x27\x22]"
-    r"|</?[｜\|]{1,2}DSML[｜\|]{1,2}\s*(?!(?:parameter|invoke|function_calls?|tool_calls?|calls)\b)([A-Za-z_][\w\-]*)(?=[\x27\x22]|\s*=\s*[\x27\x22](?:true|false)[\x27\x22]))([^>]*)>"
+    r"|</?[｜\|]{1,2}DSML[｜\|]{1,2}\s*(?!(?:parameter|invoke)\b)([A-Za-z_][\w\-]*)(?=[\x27\x22]|\s*=\s*[\x27\x22](?:true|false)[\x27\x22]|\s+string\s*=))([^>]*)>"
     r"(.*?)(?:</[｜\|]{0,2}(?:DSML[｜\|]{0,2})?\s*(?:parameter|tool_call|param|invoke)>|(?=</?[｜\|]{0,2}(?:DSML[｜\|]{0,2})?\s*(?:parameter|tool_call|param|invoke)\s+name=)|(?=(?:</?)?[｜\|]{1,2}DSML|</?[｜\|]{0,2}DSML[｜\|])|$)",
     re.DOTALL | re.IGNORECASE,
 )
@@ -1919,7 +1919,13 @@ class StreamToolParser:
                     self._end_re = None
                     continue
                 brace_idx = self.buffer.find("{")
-                if brace_idx != -1 and not self.json_done:
+                # A JSON payload right after the opener (<tool_call>{"name": ...});
+                # a brace inside DSML parameter markup is part of a value.
+                if (
+                    brace_idx != -1
+                    and not self.json_done
+                    and not self.buffer[self.buffer.find(">") + 1 : brace_idx].strip()
+                ):
                     decoder = json.JSONDecoder()
                     try:
                         data, consumed = decoder.raw_decode(self.buffer[brace_idx:])
