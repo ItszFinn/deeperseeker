@@ -2349,6 +2349,9 @@ async def _send_message_unlocked(
 
     think_open = False
     got_output = False
+    # The last fragment opened is not part of the reply (TIP: "This response is
+    # AI-generated, for reference only.", search/link fragments): drop its text.
+    foreign_fragment = False
     # DeepSeek ends a reply it cut short (seen mid-thinking on long contexts) with
     # status INCOMPLETE. With no answer text yet that is a failed turn, not a
     # finished one: an empty "stop" makes agent clients end the turn.
@@ -2382,7 +2385,7 @@ async def _send_message_unlocked(
                 )
 
         async def _emit_from_event(data):
-            nonlocal think_open, got_output, incomplete, got_response
+            nonlocal think_open, got_output, incomplete, got_response, foreign_fragment
             if isinstance(data, dict) and data.get("type") == "error":
                 _raise_sse_error_event(data, recent_lines)
 
@@ -2426,6 +2429,9 @@ async def _send_message_unlocked(
                 fragments = data["v"]["response"].get("fragments")
                 if fragments:
                     for fragment in fragments:
+                        foreign_fragment = fragment.get("type") not in ("THINK", "RESPONSE")
+                        if foreign_fragment:
+                            continue
                         if fragment.get("type") == "THINK":
                             if not think_open:
                                 yield "<think>\n"
@@ -2445,6 +2451,7 @@ async def _send_message_unlocked(
                 fragments = data.get("v")
                 if isinstance(fragments, list):
                     for fragment in fragments:
+                        foreign_fragment = fragment.get("type") not in ("THINK", "RESPONSE")
                         if fragment.get("type") == "RESPONSE":
                             if think_open:
                                 yield "\n</think>\n\n"
@@ -2458,13 +2465,10 @@ async def _send_message_unlocked(
                                 think_open = True
                             got_output = True
                             yield fragment.get("content", "")
-                        else:
-                            got_output = True
-                            yield fragment.get("content", "")
                 return
 
             v = data.get("v")
-            if isinstance(v, str) and v:
+            if isinstance(v, str) and v and not foreign_fragment:
                 got_output = True
                 got_response = got_response or not think_open
                 yield v
