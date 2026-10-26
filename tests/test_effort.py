@@ -25,6 +25,8 @@ def _prompt(effort):
 def test_instruction_per_effort():
     assert "[REASONING EFFORT" not in _prompt(None)
     assert "[REASONING EFFORT" not in _prompt("medium")
-    assert "[REASONING EFFORT" not in _prompt("high")
+    # high must differ from medium: one switch upstream, so only the instruction can
+    assert "[REASONING EFFORT: high]" in _prompt("high")
+    assert "[REASONING EFFORT: max]" not in _prompt("high")
     assert "[REASONING EFFORT: max]" in _prompt("max")
     assert "[REASONING EFFORT: max]" in _prompt("xhigh")
