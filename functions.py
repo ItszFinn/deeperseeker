@@ -2317,6 +2317,9 @@ async def send_message(chat_id, auth_token, *args, **kwargs):
         while (item := await queue.get()) is not done:
             if isinstance(item, Exception):
                 raise item
+            # The pump task runs in a copy of our context: hand the reply id it
+            # read from the SSE back to the caller, who saves the session with it.
+            reply_id.set(task.get_context().get(reply_id))
             yield item
     finally:
         # A consumer that closes us (disconnect, abort) still cancels the upstream.
