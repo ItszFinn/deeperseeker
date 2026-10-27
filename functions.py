@@ -2117,11 +2117,20 @@ async def solve_create_pow(target_path, auth_token):
 async def _upstream_json(response):
     """JSON body of an upstream answer. DeepSeek answers bursts with a challenge
     page instead (seen: HTTP 202 text/html on chat_session/create): that is a
-    rate limit (429), not a crash."""
+    rate limit (429), not a crash.
+
+    A dead credential comes back as HTTP 200 with {"code": 40003, "msg":
+    "INVALID_TOKEN", "data": null} (seen: all pool tokens at once). That is a
+    401, so the pool quarantines the token and rotates instead of crashing on
+    data["data"] being None."""
     try:
-        return await response.json()
+        data = await response.json()
     except aiohttp.ContentTypeError:
         body = await response.text()
+    else:
+        if isinstance(data, dict) and data.get("code") == 40003:
+            raise UpstreamError(401, f"upstream {data.get('msg') or 'INVALID_TOKEN'}")
+        return data
     status = response.status if response.status >= 400 else 429
     raise UpstreamError(status, f"non-JSON answer (HTTP {response.status}): {body[:200]}")
 
