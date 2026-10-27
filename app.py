@@ -71,7 +71,6 @@ from functions import (
     record_file,
     record_usage,
     restore_token,
-    relogin_quarantined,
     save_session,
     send_message,
     upload_file,
@@ -340,22 +339,11 @@ async def _db(fn, *args, **kwargs):
     return await asyncio.to_thread(fn, *args, **kwargs)
 
 
-async def _relogin_loop():
-    while True:
-        await asyncio.sleep(60)
-        try:
-            await relogin_quarantined()
-        except Exception:
-            logger.exception("Re-login sweep failed")
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await _db(init_db)
     _install_key_access_formatter()
-    relogin_task = asyncio.create_task(_relogin_loop())
     yield
-    relogin_task.cancel()
     # Stage 1 minor list: release the shared aiohttp ClientSession so shutdown
     # does not leak its connector sockets.
     await close_session()
