@@ -486,3 +486,66 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def test_dead_token_on_chat_create_rotates():
+    """Seen live: every pool token answered INVALID_TOKEN (a 401) on
+    chat_session/create, which runs before handle_chat's rotating try, so each
+    request failed outright. The create step must quarantine and move on."""
+    calls = {"created": [], "limited": [], "picks": []}
+
+    async def scenario():
+        app_module._chat_locks.clear()
+
+        async def fake_sig(messages, model, scope=""):
+            return "sig-dead-create"
+
+        def fake_pick(*a, **k):
+            calls["picks"].append(set(k.get("exclude") or ()))
+            return 1 if len(calls["picks"]) == 1 else 2
+
+        async def fake_create(tok):
+            calls["created"].append(tok)
+            if tok == "tok-1":
+                raise app_module.UpstreamError(401, "upstream INVALID_TOKEN")
+            return "chat-2"
+
+        def fake_send(chat_id, auth_token, message, parent, thinking=False, search=False, file_ids_=None):
+            async def ok_gen():
+                yield f"ok via {auth_token}"
+
+            return ok_gen()
+
+        async def fake_files(messages, token, last_user_only=False):
+            return []
+
+        async def fake_prompt(messages, tools, model, is_first, rollover_summary=None):
+            return "prompt"
+
+        saved = _patch([
+            ("generate_signature", fake_sig),
+            ("find_session", lambda s: None),
+            ("pick_token", fake_pick),
+            ("get_token", lambda tid: {"id": tid, "token": f"tok-{tid}", "status": "ACTIVE"}),
+            ("send_message", fake_send),
+            ("create_new_chat", fake_create),
+            ("extract_and_upload_files", fake_files),
+            ("build_prompt", fake_prompt),
+            ("mark_limited", lambda tid, code=None: calls["limited"].append((tid, code))),
+            ("mark_active", lambda tid: None),
+            ("delete_sessions_for_chat", lambda *a: None),
+            ("save_session", lambda *a: None),
+            ("record_file", lambda *a: None),
+            ("parse_tools", lambda t: ([], t)),
+            ("format_response", lambda text, model, messages, tools=None: text),
+        ])
+        try:
+            return await app_module.handle_chat([{"role": "user", "content": "hi"}], "test-model")
+        finally:
+            _restore(saved)
+            app_module._chat_locks.clear()
+
+    assert asyncio.run(scenario()) == "ok via tok-2"
+    assert calls["created"] == ["tok-1", "tok-2"]
+    assert calls["limited"] == [(1, 401)]
+    assert calls["picks"][1] == {1}

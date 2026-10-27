@@ -1170,7 +1170,29 @@ async def handle_chat(
                         scratch_chat,
                     )
 
-                session_id = await create_new_chat(tok["token"])
+                # A dead or limited account must not fail the request while
+                # another token can open the chat (seen: every pool token at
+                # once answering INVALID_TOKEN). This runs before the try below,
+                # so its rotation would never see the error.
+                tried = {_exclude_token} - {None}
+                while True:
+                    try:
+                        session_id = await create_new_chat(tok["token"])
+                        break
+                    except UpstreamError as e:
+                        if e.status not in (401, 403, 429):
+                            raise
+                        await _db(mark_limited, token_id, e.status)
+                        tried.add(token_id)
+                        token_id = await _db(pick_token, exclude=tried)
+                        if not token_id or token_id in tried:
+                            raise
+                        logger.warning(
+                            "chat_session/create HTTP %s; rotating to token #%s",
+                            e.status,
+                            token_id,
+                        )
+                        tok = await _db(get_token, token_id)
                 await _db(save_session, sig, token_id, session_id, 0)
                 parent_message_id = 0
             else:
