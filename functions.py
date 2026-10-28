@@ -1384,7 +1384,7 @@ def parse_tools(text):
     ] + [
         (m, None)
         for m in re.finditer(
-            r"<[｜\|]{0,2}DSML[｜\|]{0,2}\s*(?:function_calls?|tool_calls?|calls|invoke)\s*>",
+            r"<[｜\|]{0,2}DSML[｜\|]{0,2}\s*(?:function_calls?|tool_calls?|calls|invoke)\s*[\x27\x22]?\s*>",
             text,
             re.IGNORECASE,
         )

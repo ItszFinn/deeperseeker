@@ -391,3 +391,19 @@ def test_ascii_pipe_preserved_in_tool_arg():
     call = normalize_tool_call("Bash", {"command": "grep -E 'a|b' f | sort"})
     args = json.loads(call["function"]["arguments"])
     assert args["command"] == "grep -E 'a|b' f | sort", args
+
+
+def test_stray_quote_on_function_calls_without_invoke():
+    # Seen live from Hermes (2026-10-28): 'function_calls">' and no invoke line.
+    token = request_tools.set(TOOLS)
+    try:
+        text = (
+            f'<{B}function_calls">\n<{B}parameter name="command" string="true">ssh core \'echo "k=1"\'</{B}parameter>\n'
+            f'<{B}parameter name="timeout" string="false">90</{B}parameter>\n</{B}invoke>\n<{B}function_calls>'
+        )
+        tools, clean = parse_tools(text)
+        assert [t["function"]["name"] for t in tools] == ["bash"]
+        assert json.loads(tools[0]["function"]["arguments"]) == {"command": "ssh core 'echo \"k=1\"'", "timeout": 90}
+        assert "ssh" not in clean
+    finally:
+        request_tools.reset(token)
